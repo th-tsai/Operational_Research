@@ -1,0 +1,187 @@
+model assess1_alloys_blending
+  uses "mmxprs", "mmsystem"
+
+  writeln("\n### Assessment 1 - Alloys Blending Problem ###")
+
+  forward procedure RunSolver(cs:integer)
+  forward procedure DisplaySolution(cs:integer)
+  forward procedure DisplayConclusion
+
+  declarations
+    ! attempt cases
+   	number_of_cases = 3
+   	cases = 1..number_of_cases
+    ! products
+   	number_of_products = 3
+   	products = 1..number_of_products
+   	product_names: array(products) of string
+   	! materials
+   	number_of_materials = 4
+   	materials = 1..number_of_materials
+   	material_names: array(materials) of string
+    ! variables for constraints
+   	requirement_ratio_min: array(products) of real
+   	requirement_ratio_max: array(products) of real
+   	material_limit: array(cases) of array(materials) of real
+   	production_limit: array(products) of real
+    ! coefficients
+   	selling_price: array(products) of real
+   	material_cost: array(materials) of real
+   	row_materials_loss: real
+   	! decision variables
+   	x_use_cop: array(products) of mpvar   ! x reprisents the amount of copper used in producing each product
+   	y_use_mtr: array(materials) of mpvar  ! y reprisents the amount of each material used
+    ! for sensitivity analysis
+    material_constraints: array(materials) of linctr
+   	profits_list: array(cases) of real
+  end-declarations
+
+  ! popolate data
+  initialisations from "assess1_alloys_blending.dat"
+      product_names material_names
+      requirement_ratio_min requirement_ratio_max
+      selling_price material_cost
+      production_limit material_limit
+      row_materials_loss
+  end-initialisations
+
+
+  ! Run the main loop for multiple cases
+  forall(cs in cases) do
+
+    writeln("\n\n##### CASE ", cs, " #####\n")
+    ! Run the solver
+    RunSolver(cs)
+
+    ! Status check (optimal solution / unbounded problem / infeasible problem)
+    if getprobstat = XPRS_OPT then
+      writeln("Case ", cs, " : Problem solved to optimality in [",strfmt(gettime,0,2),"] seconds.")
+      ! Printing results
+      DisplaySolution(cs)
+
+      ! Only for the last time of the loop
+      if cs = number_of_cases then
+        ! Printing conclusion
+        DisplayConclusion
+      end-if
+
+    elif getprobstat = XPRS_INF then
+      writeln("Case ", cs, " : The solution is infeasible.\n")
+    end-if
+
+  end-do
+
+
+  ! Procedure for solver running
+  procedure RunSolver(cs:integer)
+
+    ! Objective function
+    total_profit:=
+       sum(p in products) selling_price(p) * (x_use_cop(p) + y_use_mtr(p)) * (1 - row_materials_loss) -
+      (sum(m in materials) material_cost(m) * y_use_mtr(m))
+
+    ! Constraints follows
+
+    ! Requirements satisfaction
+    forall(p in products) do
+      x_use_cop(p) <= requirement_ratio_max(p) * (x_use_cop(p) + y_use_mtr(p))
+      x_use_cop(p) >= requirement_ratio_min(p) * (x_use_cop(p) + y_use_mtr(p))
+    end-do
+
+    ! Material quantity limit
+    sum(p in products) x_use_cop(p) = y_use_mtr(4)  ! Sum up the amount of Copper for each product
+    forall(m in materials) do
+      material_constraints(m) := (y_use_mtr(m)) <= material_limit(cs,m)
+    end-do
+
+    ! Production limit
+    forall(p in products) do
+      (x_use_cop(p) + y_use_mtr(p)) * (1 - row_materials_loss) <= production_limit(p)
+    end-do
+
+    ! Solve the problem
+    maximize(total_profit)
+    profits_list(cs) := getobjval
+
+  end-procedure
+
+
+  ! Procedure for printing results
+  procedure DisplaySolution(cs:integer)
+
+    ! Production Plan
+    writeln("\n*** Production Plan (Kg) ***")
+    forall(p in products) do
+      writeln("Product: ", product_names(p),
+        " | Copper: ", strfmt(getsol(x_use_cop(p)),9,2),
+        " (ratio: ", strfmt(getsol(x_use_cop(p)) / (getsol(x_use_cop(p)) + getsol(y_use_mtr(p))) * 100, 0, 2), "%)",
+        " | ", material_names(p), " :", strfmt(getsol(y_use_mtr(p)),9,2),
+        " (ratio: ", strfmt(getsol(y_use_mtr(p)) / (getsol(x_use_cop(p)) + getsol(y_use_mtr(p))) * 100, 0, 2), "%)",
+        "")
+    end-do
+    writeln("\nTotal profit: £", strfmt(profits_list(cs),0,2))
+
+    writeln("\n*** Production Limits ***")
+    writeln("Product   | Limit (Kg) | Actual prod w loss (Kg)")
+    writeln("---------------------------------------------------")
+    forall(p in products) do
+      writeln(product_names(p),
+        " |  ", strfmt(production_limit(p),7,0),
+        "   |  ", strfmt((getsol(x_use_cop(p)) + getsol(y_use_mtr(p))) * (1 - row_materials_loss), 9, 2))
+    end-do
+
+    writeln("\n*** Material Limits ***")
+    writeln("Material   |  Limit (Kg)   |  Actual consumption (Kg)   | Reminder to limit (Kg)")
+    writeln("------------------------------------------------------------------------------")
+    forall(m in materials) do
+      writeln(material_names(m),
+        "  |  ", strfmt(material_limit(cs,m),9,2),
+        "    | ", strfmt(getsol(y_use_mtr(m)),9,2),
+        " (ratio: ", strfmt(getsol(y_use_mtr(m))/material_limit(cs,m)*100,6,2), "%)",
+        " |  ", strfmt(material_limit(cs,m) - getsol(y_use_mtr(m)),9,2) )
+    end-do
+
+    writeln("\n*** Sensitivity Analysis ***")
+    forall(m in materials) do
+      ! Shadow price for each products
+      shadow_price := getdual(material_constraints(m))
+      writeln("Material: ", material_names(m), " --------------------------------")
+      writeln("  Shadow price (£/Kg)        | ", strfmt(shadow_price,0,2))
+
+      ! Shadow price interval and New estimated optimal value
+      if(getslack(material_constraints(m))<0.0001) then
+        lower_bound := getrange(XPRS_LOACT, material_constraints(m))
+        upper_bound := getrange(XPRS_UPACT, material_constraints(m))
+        writeln("  Shadow price interval (Kg) | (" ,strfmt(lower_bound,0,2),", ",strfmt(upper_bound,0,2),")")
+        new_opt_val := getobjval + shadow_price*(upper_bound - material_limit(cs,m))
+        writeln("  Original limit (Kg)        | " ,strfmt(material_limit(cs,m),0,2))
+        writeln("  Recommended limit (Kg)     | " ,strfmt(upper_bound,0,2))
+        writeln("  New optimal value (£)      | " ,strfmt(new_opt_val,0,2))
+      end-if
+    end-do
+
+  end-procedure
+
+
+  ! Procedure for printing conclusion
+  procedure DisplayConclusion
+
+    ! Comparizon for conclusion
+    writeln("\n\n##### Comparison for Conclusion #####\n")
+    writeln("Case No | Total profit (£) | Material limit (Kg)")
+    writeln("        |                  | ( Zinc   :  Tin   : Aluminium : Copper )")
+    writeln("-----------------------------------------------------------------------")
+    forall(c in cases) do
+      write("Case ", c, "  |  ", strfmt(profits_list(c),12,2), "    | ")
+      forall(m in materials) do
+        write(strfmt(material_limit(c,m),9,2), " ")
+      end-do
+      if c = number_of_cases: write("   <-- BEST PROPOSAL!!")
+      write("\n")
+    end-do
+    writeln("\n\nNote: Rounded up all float values to two decimal places in the results.")
+
+  end-procedure
+
+
+end-model
