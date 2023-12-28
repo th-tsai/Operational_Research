@@ -1,0 +1,240 @@
+model assess2_MIP_ProductiCo
+  uses "mmxprs", "mmsystem"
+  setparam('XPRS_MIPRELSTOP', 0.00001)
+
+  writeln("\n### Assessment 2 - MIP_Producti-Co - Weekly Production Plan ###")
+
+  forward procedure RunSolver(cs:integer)
+  forward procedure DisplaySolution(cs:integer)
+  forward procedure DisplayConclusion
+
+  declarations
+    ! attempt cases
+   	number_of_cases = 9
+   	cases = 1..number_of_cases
+    ! products
+   	number_of_products = 7
+   	products = 1..number_of_products
+   	product_names: array(products) of string
+   	! working types
+   	number_of_working_types = 2
+   	working_types = 1..number_of_working_types
+   	working_type_names: array(working_types) of string
+   	! calender day
+    num_of_days = 7
+    day = 1..num_of_days
+    day_names: array(day) of string
+    para = 0..4 ! parameter for computing schedule
+    ! primary coefficients
+   	s_sale_price: array(cases) of array(products) of real
+   	k_man_hour: array(cases) of array(products) of real
+    ! variables for labour force
+   	c_hourly_salary: array(working_types) of real
+   	h_daily_work_hours: array(working_types) of real
+   	#weekly_work_days: array(working_types) of real
+   	weekly_parttime_ratio: real
+   	daily_workers_limit: real
+    ! variables for additional requirements
+   	g_setup_cost: array(products) of real
+   	d_setup_hour_p3_p4: real
+   	e_excessive_units_threshold: array(products) of real
+   	f_excessive_units_added_hours: array(products) of real
+   	! decision variables
+   	x_daily_produced_units: array(day, products) of mpvar       ! x represents the units of each product produced per day
+   	y_daily_started_workers: array(day, working_types) of mpvar ! y represents the number of workers for each working type per day
+    z_daily_produced_flag: array(day, products) of mpvar        ! z represents whether each product produced per day
+    l_daily_produced_flag_p3_p4: array(day) of mpvar            ! l represents whether the product-3&4 produced per day
+   	u_daily_nonexeeded_units: array(day, products) of mpvar     ! u represents the number of non-exeesive units of each product produced per day
+   	v_daily_exeeded_units: array(day, products) of mpvar        ! v represents the number of exeesive units of each product produced per day
+
+    ! for solutions and analysis
+   	profits_list: array(cases) of real
+   	total_units_list: array(cases, products) of real
+   	total_workers_list: array(cases, working_types) of real
+    ! for Looping over optimization (*to override constraints avoiding re-use)
+    daily_workers_ctrs: array(day) of linctr
+    parttimers_ctrs: linctr
+    bigM_ctrs: array(day, products, 1..2) of linctr
+    bigM_comb_ctrs: array(day, 1..2) of linctr
+    ex_unit_ctrs: array(day, products, 1..2) of linctr
+    total_manhour_ctrs: array(day) of linctr
+  end-declarations
+
+  ! popolate data
+  initialisations from "assess2_MIP_ProductiCo_20231023.dat"
+      product_names
+      working_type_names
+      day_names
+      s_sale_price
+      k_man_hour
+      c_hourly_salary
+      h_daily_work_hours
+      #weekly_work_days
+      weekly_parttime_ratio
+      daily_workers_limit
+      g_setup_cost
+      d_setup_hour_p3_p4
+      e_excessive_units_threshold
+      f_excessive_units_added_hours
+  end-initialisations
+
+  ! Run the main loop for multiple cases
+  forall(cs in cases) do
+
+    writeln("\n##### CASE ", cs, " #####")
+    ! Run the solver
+    RunSolver(cs)
+
+    ! Status check (optimal solution / infeasible / unbounded etc)
+    pre_time := 0.00
+    if getprobstat = XPRS_OPT then
+      cur_time := gettime
+      writeln("Case ", cs, " : Problem solved to optimality in [",strfmt(cur_time-pre_time,0,2),"] seconds.")
+      pre_time := cur_time
+
+      ! Printing results
+      DisplaySolution(cs)
+
+      ! Only for the last time of the loop
+      if cs = number_of_cases then
+        ! Printing conclusion
+        DisplayConclusion
+      end-if
+
+    elif getprobstat = XPRS_UNF then
+      writeln("Case ", cs, " : The solution is unfinished.\n")
+    elif getprobstat = XPRS_INF then
+      writeln("Case ", cs, " : The solution is infeasible.\n")
+    elif getprobstat = XPRS_UNB then
+      writeln("Case ", cs, " : The solution is unbounded.\n")
+    elif getprobstat = XPRS_OTH then
+      writeln("Case ", cs, " : The solution is unsolved or objective worse than cutoff.\n")
+    end-if
+
+  end-do
+
+
+  ! Procedure for solver running
+  procedure RunSolver(cs:integer)
+
+    ! Set decision variables
+    forall(t in day) do
+      forall(w in working_types) do
+        y_daily_started_workers(t,w) is_integer
+      end-do
+      forall(p in products) do
+        x_daily_produced_units(t,p) is_integer
+        z_daily_produced_flag(t,p) is_binary
+        u_daily_nonexeeded_units(t,p) is_integer
+        v_daily_exeeded_units(t,p) is_integer
+      end-do
+      l_daily_produced_flag_p3_p4(t) is_binary
+    end-do
+
+    ! Objective function
+    total_profit:=
+      sum(t in day, p in products)(x_daily_produced_units(t,p) * s_sale_price(cs,p) - g_setup_cost(p) * z_daily_produced_flag(t,p)) -
+      sum(t in day, w in working_types, i in para)(y_daily_started_workers((6+t-i) mod 7 + 1, w) * c_hourly_salary(w) * h_daily_work_hours(w))
+
+    ! Constraints follows
+
+    ! Daily labour force limit
+    forall(t in day) do
+      daily_workers_ctrs(t) := sum(w in working_types, i in para) y_daily_started_workers((6+t-i) mod 7 + 1, w) <= daily_workers_limit
+    end-do
+
+    ! Part-time labour force limit
+    parttimers_ctrs :=
+      sum(t in day, i in para)(y_daily_started_workers((6+t-i) mod 7 + 1, 2) * h_daily_work_hours(2)) <=
+      sum(t in day, w in working_types, i in para)(y_daily_started_workers((6+t-i) mod 7 + 1, w) * h_daily_work_hours(w)) * weekly_parttime_ratio
+
+    ! Big-M (upper-band) constraints
+    possible_max_total_hours := h_daily_work_hours(1) * daily_workers_limit ! full-time workers can work longer hours than part-timers
+    forall(t in day) do
+      forall(p in products) do
+          bigM_ctrs(t,p,1) := k_man_hour(cs,p) * x_daily_produced_units(t,p) <= possible_max_total_hours * z_daily_produced_flag(t,p)
+          bigM_ctrs(t,p,2) := k_man_hour(cs,p) * (1-x_daily_produced_units(t,p)) <= possible_max_total_hours * (1-z_daily_produced_flag(t,p))
+
+      end-do
+      bigM_comb_ctrs(t,1) := l_daily_produced_flag_p3_p4(t) <= (z_daily_produced_flag(t,3) + z_daily_produced_flag(t,4)) / 2
+      bigM_comb_ctrs(t,2) := l_daily_produced_flag_p3_p4(t) >= (z_daily_produced_flag(t,3) + z_daily_produced_flag(t,4)) - 1
+    end-do
+
+    ! Exeesive unit constraints
+    forall(t in day, p in products) do
+      if e_excessive_units_threshold(p) > 0 then
+        ex_unit_ctrs(t,p,1) := u_daily_nonexeeded_units(t,p) + v_daily_exeeded_units(t,p) = x_daily_produced_units(t,p)
+        ex_unit_ctrs(t,p,2) := u_daily_nonexeeded_units(t,p) <= e_excessive_units_threshold(p)
+      end-if
+    end-do
+
+    ! Total man-hours for production
+    forall(t in day) do
+      total_manhour_ctrs(t) :=
+        sum(p in products)(k_man_hour(cs,p) * x_daily_produced_units(t,p)) +
+        sum(p in products)(f_excessive_units_added_hours(p) * v_daily_exeeded_units(t,p)) +
+        d_setup_hour_p3_p4 * l_daily_produced_flag_p3_p4(t) <=
+        sum(w in working_types, i in para)(y_daily_started_workers((6+t-i) mod 7 + 1, w) * h_daily_work_hours(w))
+    end-do
+
+    ! Solve the problem
+    maximize(total_profit)
+
+    ! Store the results
+    profits_list(cs) := getobjval
+    forall(p in products) total_units_list(cs,p) := sum(t in day)(getsol(x_daily_produced_units(t,p)))
+    forall(w in working_types) total_workers_list(cs,w) := sum(t in day)(getsol(y_daily_started_workers(t,w)))
+
+  end-procedure
+
+
+  ! Procedure for printing results
+  procedure DisplaySolution(cs:integer)
+
+    ! Weekly Production Plan
+    ! writeln("\n*** Weekly Production Plan ***")
+    write(" Day ")
+    forall(p in products) write(" | ", product_names(p))
+      forall(w in working_types) write(" | ", working_type_names(w))
+    writeln("\n----------------------------------------------------------------------------------------------------------------")
+    forall(t in day) do
+      write(" ", day_names(t)," ")
+      forall(p in products) write(" | ", strfmt(abs(getsol(x_daily_produced_units(t,p))),9))
+      forall(w in working_types) write(" | ", strfmt(abs(getsol(y_daily_started_workers(t, w))),9))
+      writeln
+    end-do
+    writeln("------------------------------------------------------------------------------------------------------------------")
+    write("Total")
+    forall(p in products) write(" | ", strfmt(abs(total_units_list(cs,p)),9))
+    forall(w in working_types) write(" | ", strfmt(abs(total_workers_list(cs,w)),9))
+    writeln
+    writeln("\nTotal weekly profit : £", strfmt(profits_list(cs),0,2), ".")
+
+  end-procedure
+
+
+  ! Procedure for printing conclusion
+  procedure DisplayConclusion
+
+    ! Comparizon for conclusion
+    writeln("\n\n##### Comparison for Conclusion #####\n")
+    writeln("Case# |  Total    : Growth | Total units per product                  | Workers  | Production time per product (man-hour)   | Sale price per product (£)")
+    writeln("      | profit(£) : rate(%)| P-1 : P-2 : P-3 : P-4 : P-5 : P-6 : P-7  | FT :  PT | P-1 : P-2 : P-3 : P-4 : P-5 : P-6 : P-7  | P1 : P2 : P3 : P4 : P5 : P-6 : P7 ")
+    writeln("---------------------------------------------------------------------------------------------------------------------------------------------------------------")
+    forall(c in cases) do
+      write("Case ", c, "| ", strfmt(profits_list(c),10,2), " : ",strfmt(((profits_list(c)/profits_list(1))-1)*100,4,1), "% |")
+      forall(p in products) write(strfmt(abs(total_units_list(c,p)),5)," ")
+      write("|")
+      forall(w in working_types) write(strfmt(abs(total_workers_list(c,w)),4)," ")
+      write("|")
+      forall(p in products) write(strfmt(k_man_hour(c,p),5,2), " ")
+      write("|")
+      forall(p in products) write(strfmt(s_sale_price(c,p),4), " ")
+      write("\n")
+    end-do
+    writeln("\nNote: Rounded up all float values to two decimal places in the results.")
+
+  end-procedure
+
+
+end-model
