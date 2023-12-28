@@ -1,0 +1,136 @@
+model Assessment3
+  uses "mmxprs", "mmsystem"
+
+  ! define variables
+  declarations
+    num_activity = 4
+    activity = 1..num_activity
+    activity_name1: array(activity) of string
+    activity_name2: array(activity) of string
+    num_year = 10
+    year = 1..num_year
+    num_block = 10
+    block = 1..num_block
+    s, M: array(block) of real
+    w, u, v: array(activity) of real
+    f: array(year) of real
+    p, q, r, n, d: real
+    x: array(year, block, activity) of mpvar
+    y: array(year, block) of mpvar
+    g, h: array(year) of mpvar
+  end-declarations
+
+  ! initialisations
+  initialisations from "assessment3_Farmco_20231104.dat"
+    s M w u v f p q r n d activity_name1 activity_name2
+  end-initialisations
+
+  ! objective function
+  objective_value:= sum(t in year)(sum(a in activity)(sum(b in block)(x(t, b, a) * s(b)) * (w(a) * v(a) - u(a)))) + ! total income by planting
+    sum(t in year)(sum(b in block)(y(t,b)) * f(t)) - ! benefit of selling cows
+    sum(t in year)(h(t)) * n - ! cost of buying grain
+    sum(t in year)(g(t)) * v(1)  - ! the benefit of grain that calculate in the total income
+    sum(b in block)(y(10, b)) * r ! cost of buying cows
+
+  ! constraints
+
+  ! binary
+  forall(t in year, b in block, a in activity) do
+    x(t, b, a) is_binary
+  end-do
+
+  ! integer
+  forall(t in year, b in block) do
+    y(t, b) is_integer
+  end-do
+
+  ! only one activity on each block every year
+  forall(t in year) do
+    forall(b in block) do
+      sum(a in activity)(x(t, b, a)) = 1
+    end-do
+  end-do
+
+  ! do not sell cows until year 10
+  forall(t in year) do
+    if t > 1 then
+      sum(b in block)(y(t, b) - y(t-1, b)) >= 0
+    end-if
+  end-do
+
+  ! if rearing cows then x(.,.,4) is 1
+  forall(t in year) do
+    forall(b in block) do
+      y(t, b) >= 0.1 - M(b) * (1 - x(t, b, 4))
+      y(t, b) <= 0.1 + M(b) * x(t, b, 4)
+    end-do
+  end-do
+
+  ! cows eat grain
+  forall(t in year) do
+    ! all grain are purchased in year 1
+    if t = 1 then
+      q * sum(b in block)(y(t, b)) = h(t)
+    else
+    ! purchasing + planting after year 1
+      q * sum(b in block)(y(t, b)) = g(t) + h(t)
+    end-if
+  end-do
+
+  ! planting grain come from last year
+  forall(t in year) do
+    if t < 10 then
+      w(1) * sum(b in block)(x(t, b, 1) * s(b)) >= g(t+1)
+    end-if
+  end-do
+
+  ! no single activity uses over 50% of land
+  forall(t in year) do
+    forall(a in activity) do
+      ! sum(b in block)(x(t, b, a) * s(b)) <= 0.5 * sum(b in block)(s(b))
+      sum(b in block)(x(t, b, a) * s(b)) <= d * sum(b in block)(s(b))
+    end-do
+  end-do
+
+  ! optimisation
+  maximise(objective_value)
+
+  ! print the results
+
+  writeln("\n### Assessment 3 - Farm-co ###\n")
+  writeln('The total profit would be £', getobjval, '.')
+  writeln
+
+  forall(t in year) do
+    writeln('In year ', t, ',')
+    writeln
+    forall(b in block) do
+      forall(a in activity) do
+        if getsol(x(t, b, a)) = 1 then
+          if getsol(y(t, b)) >= 1 then
+            writeln('   Block ', b, ' is ', activity_name1(a), ' (', getsol(y(t, b)),' cows).')
+          else
+            writeln('   Block ', b, ' is ', activity_name1(a), '.')
+          end-if
+        end-if
+      end-do
+    end-do
+    writeln
+
+    forall(a in activity) do
+      writeln(activity_name2(a), ' takes approximately ', strfmt((sum(i in block)(getsol(x(t, i, a)) * s(i)) / sum(b in block)(s(b))) * 100, 4, 2), '% of the total land.')
+      if a < 4 then
+        writeln('The yield is ', sum(i in block)(getsol(x(t, i, a)) * s(i)) * w(a), ' kg.')
+        else
+        writeln('There are ', sum(b in block)(getsol(y(t,b))), ' cows in total.')
+        writeln('  ', getsol(g(t)), ' kg of grain for feeding cows was planted last year.')
+        writeln('  ', getsol(h(t)), ' kg of grain for feeding cows is purchased this year.')
+      end-if
+
+      writeln
+    end-do
+
+    writeln
+  end-do
+
+end-model

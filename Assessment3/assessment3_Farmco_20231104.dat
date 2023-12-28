@@ -1,0 +1,13 @@
+s: [100 250 500 125 800 75 900 360 465 90]
+M: [20 50 100 25 160 15 180 72 93 18]
+w: [3 2 3.5 0]
+u: [15 10 12 0]
+v: [4.5 6 5 0]
+f: [300 150 150 150 250 100 50 100 100 350]
+p: 5
+q: 15
+r: 200
+n: 50
+d: 0.5
+activity_name1: ['planting grain' 'planting beans' 'planting wheat' 'rearing cows']
+activity_name2: ['Planting grain' 'Planting beans' 'Planting wheat' 'Rearing cows']
