@@ -1,9 +1,7 @@
-# UoE_MATH110072_MMCS
+# Operational Research Projects
 
-This repo contains four assessments of MATH10072 Methodology, Modelling and Consulting Skills at the University of Edinburgh in 2023.
+This repository includes four assessments from the "Methodology, Modelling and Consulting Skills" course, and two assessments from the "Risk and Logistics" course at the University of Edinburgh for the academic year 2023/2024. 
 
-The first three assessments were co-edited with Takae Hayashi. Those projects involve optimisation of production plans, scheduling, and farming plans with sensitivity analysis.
+During these projects, I solved various optimisation problems related to production planning, scheduling, warehouse location problems and so on using mixed integer programming and metaheuristics. 
 
-The fourth assessment is a four-person group project provided by Sopra Steria. The authors are Ting-hung Tsai (me), Takae Hayashi, Rasika Dalvi and Yukta Bhange.
-
-All these projects are optimisation problems and the software used is FICO Xpress and Xpress in Python.
+The software tools used for these projects were FICO Xpress and Python.
